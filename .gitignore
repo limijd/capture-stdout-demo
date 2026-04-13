@@ -1,0 +1,5 @@
+demo
+libcustomer.so
+output.log
+*.o
+*.dSYM/
