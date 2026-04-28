@@ -159,6 +159,13 @@ int capture_start(const char *log_path) {
         log_fp = NULL;
         return -1;
     }
+
+    // fd 1/2 现在指向 pipe（非 tty），libc 默认会把 stdout 切到 block-buffered，
+    // 导致 printf 在 fflush 前一直攒在用户态 buffer 里，与 unbuffered 的
+    // stderr/write(2) 输出乱序。强制 line-buffered 还原正常顺序。
+    // stderr 默认 unbuffered，无需改动。
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     capture_active = 1;
     return 0;
 }
