@@ -1,5 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -g
+THREAD_FLAGS = -pthread
 
 all: demo
 
@@ -9,7 +10,7 @@ libcustomer.so: customer.c
 
 # 编译主程序，链接客户 .so
 demo: main.c capture.c libcustomer.so
-	$(CC) $(CFLAGS) -o $@ main.c capture.c -L. -lcustomer -Wl,-rpath,.
+	$(CC) $(CFLAGS) $(THREAD_FLAGS) -o $@ main.c capture.c -L. -lcustomer -Wl,-rpath,.
 
 run: demo
 	./demo
@@ -17,7 +18,10 @@ run: demo
 	@echo "--- log 文件内容 ---"
 	@cat output.log
 
+test:
+	./tests/test_capture_behavior.sh
+
 clean:
 	rm -f demo libcustomer.so output.log
 
-.PHONY: all run clean
+.PHONY: all run test clean
