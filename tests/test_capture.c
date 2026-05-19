@@ -354,32 +354,6 @@ TEST(C7_io_error_count_anytime) {
     ASSERT_EQ(after, before);
 }
 
-/* C8: pthread_atfork 兜底——child 显式调 capture_stop 应安全 no-op
-   防御场景：atexit(capture_stop) 被 fork 继承到 child；客户 .so 错抄模板；
-   不管哪种触发方式，child 跑 capture_stop 都不应崩、不应污染 log。 */
-TEST(C8_child_capture_stop_is_safe_noop) {
-    unlink("/tmp/lc_c8.log");
-    ASSERT_EQ(capture_start("/tmp/lc_c8.log"), 0);
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* 在 child 显式调 capture_stop 模拟最坏情况；atfork handler 应已
-           把 capture_active 设为 0、log_fp 设为 NULL，使得 capture_stop
-           直接命中幂等守卫 return，不会 pthread_join 悬空 thread、
-           也不会 fclose 陈旧缓冲 */
-        printf("C8_CHILD_TOKEN\n");
-        fflush(stdout);
-        capture_stop();   /* 应为 no-op */
-        capture_stop();   /* 再调一次也不崩 */
-        _exit(0);
-    }
-    ASSERT(pid > 0);
-    int st;
-    waitpid(pid, &st, 0);
-    capture_stop();
-    ASSERT(WIFEXITED(st));
-    ASSERT_EQ(WEXITSTATUS(st), 0);
-    ASSERT(file_contains("/tmp/lc_c8.log", "C8_CHILD_TOKEN"));
-}
 
 TEST(B4_grandchild) {
     unlink("/tmp/lc_b4.log");
@@ -437,7 +411,6 @@ int main(void) {
     RUN_TEST(C5_start_stop_re_entry);
     RUN_TEST(C6_stop_idempotent);
     RUN_TEST(C7_io_error_count_anytime);
-    RUN_TEST(C8_child_capture_stop_is_safe_noop);
 
     RUN_TEST(D1_fd1_restored);
     RUN_TEST(D2_fd2_restored);

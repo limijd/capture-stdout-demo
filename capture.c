@@ -24,29 +24,6 @@ static FILE *log_fp;
 static int capture_active;
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 static atomic_size_t io_err_count;  /* 累计 log 写错误，C11 atomic */
-static int atfork_registered;       /* 确保 pthread_atfork 只注册一次 */
-
-static void reset_cap(stream_capture_t *cap);   /* 前向声明，供 atfork handler 用 */
-
-/* fork() 在 POSIX 下整表复制 atexit handler list、整片内存（含 cap_out/cap_err
-   的 pthread_t、log_fp、capture_active 标记），但**只复制调用 fork 的那个线程**——
-   reader 线程不存在于 child。所以 child 里的 cap.thread 是悬空 pthread_t、
-   log_fp 是陈旧 FILE* 缓冲快照。
-
-   如果 child 通过任何方式触发 capture_stop（atexit 继承、客户 .so 显式调、
-   错抄模板），后果：
-   - pthread_join(悬空 pthread_t) → glibc ESRCH 立即返回（survivable）
-   - fclose(log_fp) → child 把陈旧 buffer 写进 log file → **重复/错位字节**污染 log
-
-   防御：fork 后在 child 立刻把组件状态清零，让任何 child 路径的 capture_stop
-   变成 no-op。注：故意不 close FILE*——child fclose 就是要避免的污染源；
-   kernel 在 child 退出时回收 fd 与 FILE 内存即可。 */
-static void capture_atfork_child(void) {
-    capture_active = 0;
-    log_fp = NULL;          /* 故意丢弃，不 fclose，避免脏缓冲写 log */
-    reset_cap(&cap_out);
-    reset_cap(&cap_err);
-}
 
 static void reset_cap(stream_capture_t *cap) {
     cap->saved_fd = -1;
@@ -185,16 +162,6 @@ int capture_start(const char *log_path) {
 
     reset_cap(&cap_out);
     reset_cap(&cap_err);
-
-    /* 只注册一次：fork 后在 child 把组件状态清零，避免 atexit(capture_stop)
-       继承到 child 后 fclose 陈旧 log_fp 缓冲污染 log。pthread_atfork 注册
-       是进程级、不能撤销，所以用 atfork_registered 守卫避免多次 start 重复注册 */
-    if (!atfork_registered) {
-        if (pthread_atfork(NULL, NULL, capture_atfork_child) == 0) {
-            atfork_registered = 1;
-        }
-        /* 注册失败不致命，让 capture 继续；只是失去 child 兜底 */
-    }
 
     log_fp = fopen(log_path, "a");
     if (!log_fp) return -1;

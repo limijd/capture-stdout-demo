@@ -24,7 +24,6 @@ size_t capture_io_error_count(void);
 ```c
 int main(int argc, char **argv) {
     if (capture_start("xxlink.log") < 0) { perror("capture_start"); return 1; }
-    atexit(capture_stop);
 
     /* … 主流程：fork 子进程、dlopen 插件 … */
 
@@ -40,10 +39,10 @@ int main(int argc, char **argv) {
 
 - `capture_start` 必须在主线程、fork 任何子进程 / dlopen 任何 .so **之前**调用
 - `capture_stop` 调用前必须先 `waitpid()` 回收所有 fork child，否则 pthread_join 死锁
+- `capture_stop` **只能在主进程主线程调用**——child 进程绝对不要调（fork 时 reader 线程不进 child，cap.thread 悬空 + 陈旧 log_fp 缓冲会污染 log）。child 应用 `_exit()` 退出
 - 同进程同时只允许一次 active 捕获；`start → stop → start` 可重入
-- `capture_stop` 幂等，可与 `atexit(capture_stop)` 配合做兜底
+- `capture_stop` 幂等（多次调安全）
 - 子进程通过 fd 继承自动捕获，不需要额外编码
-- **Fork 安全**：组件用 `pthread_atfork` 在 child 自动清零捕获状态。child 直接或通过继承的 `atexit(capture_stop)` 调 stop 是**安全 no-op**——不会污染 log；但 child 仍建议用 `_exit()` 退出避免触发继承的 atexit 链
 
 ## 生产部署 — Hang 风险与缓解
 
@@ -72,16 +71,17 @@ int main(int argc, char **argv) {
 **MUST**：
 
 1. **xxlink 主循环结束、`capture_stop()` 之前必须 `wait_all_children()`**。如果用 job pool / 异步队列 fork gcc，确保 pool 已完全 drain 再 stop。这是组件外的纪律——**没有任何代码层强制约束**，只有契约
-2. **log 文件放本地 SSD**，避免 NFS / 网络盘上的慢写传染到 gcc 编译速度
+2. **child 进程严禁调 `capture_stop`**。fork+exec 模式的 child 用 `_exit()` 退出最干净；纯 fork（不 exec）的 child 退出也用 `_exit()` 而非 `exit()` / `return`，避免触发 libc cleanup 链
+3. **log 文件放本地 SSD**，避免 NFS / 网络盘上的慢写传染到 gcc 编译速度
 
 **SHOULD**：
 
-3. 加 `atexit(capture_stop)` 兜底（见 §集成模板）。正常路径忘了 wait 它救不了，但异常 exit 时能清理 fd 资源
 4. 监控体系里把 xxlink 的 SIGTERM 不响应当作告警信号——pthread_join 卡死时进程必须 SIGKILL 才能退出
 
 **不建议**：
 
-5. 不要在信号处理函数里调 `capture_stop`（`pthread_join` / `fflush` / `fclose` 非 async-signal-safe，会 deadlock 或 UB）
+5. **不要** `atexit(capture_stop)`。理由：atexit 会被 fork 整表继承到 child，child 退出时跑这个 handler 会污染 log file（fclose 陈旧 FILE* 缓冲）。正常路径显式 `capture_stop()` 已够，异常 `exit()` 路径丢的几行 trailing 输出价值不大
+6. 不要在信号处理函数里调 `capture_stop`（`pthread_join` / `fflush` / `fclose` 非 async-signal-safe，会 deadlock 或 UB）
 
 ### 一句话总结
 
