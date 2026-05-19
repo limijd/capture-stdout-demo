@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include <dirent.h>
+#include <fcntl.h>
 
 int g_test_pass = 0;
 int g_test_fail = 0;
@@ -101,6 +102,56 @@ TEST(B3_concurrent_children) {
     size_t hits = count_unique_tokens("/tmp/lc_b3.log", "B3-C%02d-L%04d", 16, 1000);
     ASSERT_EQ(hits, (size_t)(16 * 1000));
     ASSERT_EQ(capture_io_error_count(), (size_t)0);
+}
+
+/* ========== E: shell 重定向兼容 ========== */
+
+TEST(E1_stderr_redirect_preserved) {
+    unlink("/tmp/lc_e1_err_simulated.txt");
+    unlink("/tmp/lc_e1.log");
+    int file_fd = open("/tmp/lc_e1_err_simulated.txt",
+                       O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    ASSERT(file_fd > 0);
+    int saved_stderr_orig = dup(STDERR_FILENO);
+    ASSERT(saved_stderr_orig > 0);
+    ASSERT(dup2(file_fd, STDERR_FILENO) == STDERR_FILENO);
+    close(file_fd);
+
+    ASSERT_EQ(capture_start("/tmp/lc_e1.log"), 0);
+    fprintf(stderr, "E1_TOKEN_SHELL_2REDIR\n");
+    fflush(stderr);
+    capture_stop();
+
+    dup2(saved_stderr_orig, STDERR_FILENO);
+    close(saved_stderr_orig);
+
+    ASSERT(file_contains("/tmp/lc_e1.log", "E1_TOKEN_SHELL_2REDIR"));
+    ASSERT(file_contains("/tmp/lc_e1_err_simulated.txt",
+                         "E1_TOKEN_SHELL_2REDIR"));
+}
+
+TEST(E2_stdout_redirect_preserved) {
+    unlink("/tmp/lc_e2_out_simulated.txt");
+    unlink("/tmp/lc_e2.log");
+    int file_fd = open("/tmp/lc_e2_out_simulated.txt",
+                       O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    ASSERT(file_fd > 0);
+    int saved_stdout_orig = dup(STDOUT_FILENO);
+    ASSERT(saved_stdout_orig > 0);
+    ASSERT(dup2(file_fd, STDOUT_FILENO) == STDOUT_FILENO);
+    close(file_fd);
+
+    ASSERT_EQ(capture_start("/tmp/lc_e2.log"), 0);
+    printf("E2_TOKEN_SHELL_1REDIR\n");
+    fflush(stdout);
+    capture_stop();
+
+    dup2(saved_stdout_orig, STDOUT_FILENO);
+    close(saved_stdout_orig);
+
+    ASSERT(file_contains("/tmp/lc_e2.log", "E2_TOKEN_SHELL_1REDIR"));
+    ASSERT(file_contains("/tmp/lc_e2_out_simulated.txt",
+                         "E2_TOKEN_SHELL_1REDIR"));
 }
 
 /* ========== D: fd / 资源还原 ========== */
@@ -293,6 +344,9 @@ int main(void) {
 #ifdef __linux__
     RUN_TEST(D3_no_fd_leak_after_50_cycles);
 #endif
+
+    RUN_TEST(E1_stderr_redirect_preserved);
+    RUN_TEST(E2_stdout_redirect_preserved);
 
     fprintf(stderr, "\nTotal: %d passed, %d failed\n",
             g_test_pass, g_test_fail);
