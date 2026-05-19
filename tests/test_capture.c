@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <errno.h>
 
 int g_test_pass = 0;
 int g_test_fail = 0;
@@ -101,6 +102,80 @@ TEST(B3_concurrent_children) {
     ASSERT_EQ(capture_io_error_count(), (size_t)0);
 }
 
+/* ========== C: 生命周期与 API ========== */
+
+TEST(C1_stop_without_start) {
+    capture_stop();
+    capture_stop();
+    ASSERT(1);
+}
+
+TEST(C2_double_start_busy) {
+    unlink("/tmp/lc_c2.log");
+    ASSERT_EQ(capture_start("/tmp/lc_c2.log"), 0);
+    errno = 0;
+    int r = capture_start("/tmp/lc_c2_b.log");
+    int saved_errno = errno;
+    capture_stop();
+    ASSERT_EQ(r, -1);
+    ASSERT_EQ(saved_errno, EBUSY);
+}
+
+TEST(C3_null_path_einval) {
+    errno = 0;
+    int r = capture_start(NULL);
+    ASSERT_EQ(r, -1);
+    ASSERT_EQ(errno, EINVAL);
+}
+
+TEST(C4_bad_path_returns_error) {
+    errno = 0;
+    int r = capture_start("/no/such/dir/x.log");
+    ASSERT_EQ(r, -1);
+    ASSERT(errno != 0);
+    /* 没残留：再 capture_start 一个好路径应成功 */
+    unlink("/tmp/lc_c4.log");
+    ASSERT_EQ(capture_start("/tmp/lc_c4.log"), 0);
+    capture_stop();
+}
+
+TEST(C5_start_stop_re_entry) {
+    unlink("/tmp/lc_c5a.log");
+    unlink("/tmp/lc_c5b.log");
+    ASSERT_EQ(capture_start("/tmp/lc_c5a.log"), 0);
+    printf("C5_ROUND_1\n");
+    capture_stop();
+    ASSERT(file_contains("/tmp/lc_c5a.log", "C5_ROUND_1"));
+    ASSERT_EQ(capture_start("/tmp/lc_c5b.log"), 0);
+    printf("C5_ROUND_2\n");
+    capture_stop();
+    ASSERT(file_contains("/tmp/lc_c5b.log", "C5_ROUND_2"));
+}
+
+TEST(C6_stop_idempotent) {
+    unlink("/tmp/lc_c6.log");
+    ASSERT_EQ(capture_start("/tmp/lc_c6.log"), 0);
+    printf("C6_TOKEN\n");
+    capture_stop();
+    capture_stop();
+    capture_stop();
+    ASSERT(file_contains("/tmp/lc_c6.log", "C6_TOKEN"));
+}
+
+TEST(C7_io_error_count_anytime) {
+    /* start 前 */
+    size_t before = capture_io_error_count();
+    unlink("/tmp/lc_c7.log");
+    ASSERT_EQ(capture_start("/tmp/lc_c7.log"), 0);
+    /* start 中 */
+    printf("C7_TOKEN\n");
+    /* 期望 happy path 不增加 */
+    capture_stop();
+    /* stop 后 */
+    size_t after = capture_io_error_count();
+    ASSERT_EQ(after, before);
+}
+
 TEST(B4_grandchild) {
     unlink("/tmp/lc_b4.log");
     ASSERT_EQ(capture_start("/tmp/lc_b4.log"), 0);
@@ -148,6 +223,14 @@ int main(void) {
     RUN_TEST(B2_fork_exec);
     RUN_TEST(B3_concurrent_children);
     RUN_TEST(B4_grandchild);
+
+    RUN_TEST(C1_stop_without_start);
+    RUN_TEST(C2_double_start_busy);
+    RUN_TEST(C3_null_path_einval);
+    RUN_TEST(C4_bad_path_returns_error);
+    RUN_TEST(C5_start_stop_re_entry);
+    RUN_TEST(C6_stop_idempotent);
+    RUN_TEST(C7_io_error_count_anytime);
 
     fprintf(stderr, "\nTotal: %d passed, %d failed\n",
             g_test_pass, g_test_fail);
