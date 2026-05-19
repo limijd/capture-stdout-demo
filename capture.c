@@ -21,6 +21,7 @@ static stream_capture_t cap_err;
 static FILE *log_fp;
 static int capture_active;
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
+static size_t io_err_count;  /* 累计 log 写错误，atomic via __atomic_* */
 
 static void reset_cap(stream_capture_t *cap) {
     cap->saved_fd = -1;
@@ -183,4 +184,8 @@ void capture_stop(void) {
     if (log_fp) fclose(log_fp);
     log_fp = NULL;
     capture_active = 0;
+}
+
+size_t capture_io_error_count(void) {
+    return __atomic_load_n(&io_err_count, __ATOMIC_RELAXED);
 }
