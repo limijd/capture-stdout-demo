@@ -22,12 +22,19 @@ size_t capture_io_error_count(void);
 ## 集成模板（推荐）
 
 ```c
+#include <sys/wait.h>
+#include "capture.h"
+
 int main(int argc, char **argv) {
     if (capture_start("xxlink.log") < 0) { perror("capture_start"); return 1; }
 
     /* … 主流程：fork 子进程、dlopen 插件 … */
 
-    wait_all_children();   /* 必须先回收所有 fork child（capture_stop 契约） */
+    /* 必须先回收所有 fork child，否则 capture_stop 的 pthread_join 死锁。
+       组件不提供这个 helper——`waitpid` 是 POSIX，等子进程本来就是调用方
+       自己的职责，xxlink 可按需扩展（按类型分类、记录退出码等）。 */
+    while (waitpid(-1, NULL, 0) > 0) { /* drain */ }
+
     capture_stop();
     if (capture_io_error_count() > 0)
         fprintf(stderr, "warning: %zu log write errors\n", capture_io_error_count());
@@ -38,7 +45,7 @@ int main(int argc, char **argv) {
 ## 契约要点
 
 - `capture_start` 必须在主线程、fork 任何子进程 / dlopen 任何 .so **之前**调用
-- `capture_stop` 调用前必须先 `waitpid()` 回收所有 fork child，否则 pthread_join 死锁
+- `capture_stop` 调用前必须先 `waitpid()` 回收所有 fork child，否则 pthread_join 死锁；最简写法：`while (waitpid(-1, NULL, 0) > 0) {}`
 - `capture_stop` **只能在主进程主线程调用**——child 进程绝对不要调（fork 时 reader 线程不进 child，cap.thread 悬空 + 陈旧 log_fp 缓冲会污染 log）。child 应用 `_exit()` 退出
 - 同进程同时只允许一次 active 捕获；`start → stop → start` 可重入
 - `capture_stop` 幂等（多次调安全）
@@ -70,7 +77,7 @@ int main(int argc, char **argv) {
 
 **MUST**：
 
-1. **xxlink 主循环结束、`capture_stop()` 之前必须 `wait_all_children()`**。如果用 job pool / 异步队列 fork gcc，确保 pool 已完全 drain 再 stop。这是组件外的纪律——**没有任何代码层强制约束**，只有契约
+1. **xxlink 主循环结束、`capture_stop()` 之前必须 `waitpid()` 回收所有 child**（最简：`while (waitpid(-1, NULL, 0) > 0) {}`）。如果用 job pool / 异步队列 fork gcc，确保 pool 已完全 drain 再 stop。这是组件外的纪律——**没有任何代码层强制约束**，只有契约
 2. **child 进程严禁调 `capture_stop`**。fork+exec 模式的 child 用 `_exit()` 退出最干净；纯 fork（不 exec）的 child 退出也用 `_exit()` 而非 `exit()` / `return`，避免触发 libc cleanup 链
 3. **log 文件放本地 SSD**，避免 NFS / 网络盘上的慢写传染到 gcc 编译速度
 
