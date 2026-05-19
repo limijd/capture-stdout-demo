@@ -43,8 +43,10 @@ TEST(A3_write) {
     ASSERT_EQ(capture_start("/tmp/lc_a3.log"), 0);
     const char *m1 = "A3_TOKEN_WRITE_OUT\n";
     const char *m2 = "A3_TOKEN_WRITE_ERR\n";
-    (void)!write(STDOUT_FILENO, m1, strlen(m1));
-    (void)!write(STDERR_FILENO, m2, strlen(m2));
+    ssize_t n1 = write(STDOUT_FILENO, m1, strlen(m1));
+    ssize_t n2 = write(STDERR_FILENO, m2, strlen(m2));
+    ASSERT_EQ(n1, (ssize_t)strlen(m1));
+    ASSERT_EQ(n2, (ssize_t)strlen(m2));
     capture_stop();
     ASSERT(file_contains("/tmp/lc_a3.log", "A3_TOKEN_WRITE_OUT"));
     ASSERT(file_contains("/tmp/lc_a3.log", "A3_TOKEN_WRITE_ERR"));
@@ -382,7 +384,8 @@ TEST(A5_big_write) {
     memcpy(big, "A5_TOKEN_BIG_HEAD", strlen("A5_TOKEN_BIG_HEAD"));
     memcpy(big + SZ - strlen("A5_TOKEN_BIG_TAIL\n"),
            "A5_TOKEN_BIG_TAIL\n", strlen("A5_TOKEN_BIG_TAIL\n"));
-    (void)!write(STDOUT_FILENO, big, SZ);
+    ssize_t n = write(STDOUT_FILENO, big, SZ);
+    ASSERT_EQ(n, (ssize_t)SZ);
     capture_stop();
     ASSERT(file_contains("/tmp/lc_a5.log", "A5_TOKEN_BIG_HEAD"));
     ASSERT(file_contains("/tmp/lc_a5.log", "A5_TOKEN_BIG_TAIL"));

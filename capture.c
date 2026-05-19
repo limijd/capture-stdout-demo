@@ -5,9 +5,8 @@
 #include <pthread.h>
 #include <errno.h>
 #include <string.h>
-#ifdef __linux__
 #include <fcntl.h>
-#endif
+#include <stdatomic.h>
 
 // 每个流（stdout/stderr）的捕获状态
 typedef struct {
@@ -24,7 +23,7 @@ static stream_capture_t cap_err;
 static FILE *log_fp;
 static int capture_active;
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
-static size_t io_err_count;  /* 累计 log 写错误，atomic via __atomic_* */
+static atomic_size_t io_err_count;  /* 累计 log 写错误，C11 atomic */
 
 static void reset_cap(stream_capture_t *cap) {
     cap->saved_fd = -1;
@@ -67,10 +66,11 @@ static void *reader_thread(void *arg) {
         size_t w = fwrite(buf, 1, (size_t)n, log_fp);
         if (w != (size_t)n) {
             int err = errno;
-            __atomic_fetch_add(&io_err_count, 1, __ATOMIC_RELAXED);
+            atomic_fetch_add_explicit(&io_err_count, 1, memory_order_relaxed);
             /* 诊断走 reader 自己的 saved_fd（reader_out → 原 fd 1 目标，
-               reader_err → 原 fd 2 目标），不需要全局诊断 fd */
-            dprintf(cap->saved_fd,
+               reader_err → 原 fd 2 目标），不需要全局诊断 fd。
+               dprintf 自身失败也无能为力，显式 (void) 标注 best-effort 语义 */
+            (void)dprintf(cap->saved_fd,
                 "log_capture: fwrite failed: %s\n", strerror(err));
             /* 不 break——继续 drain pipe，否则 writer 死锁 */
         }
@@ -99,6 +99,13 @@ static int start_one(stream_capture_t *cap, int target_fd) {
         return -1;
     }
     cap->pipe_rd = pipe_fds[0];
+
+    /* pipe_rd 设 close-on-exec：避免 child exec 后继承组件内部 read 端 fd。
+       pipe_w 不设（后续 dup2 到 fd 1/2，需要被 fork+exec 子进程继承）。 */
+    {
+        int flags = fcntl(pipe_fds[0], F_GETFD);
+        if (flags >= 0) (void)fcntl(pipe_fds[0], F_SETFD, flags | FD_CLOEXEC);
+    }
 
 #ifdef __linux__
     /* 扩容 pipe 到 1MB 防御 burst；失败静默 fallback 到默认 16-64KB */
@@ -201,5 +208,5 @@ void capture_stop(void) {
 }
 
 size_t capture_io_error_count(void) {
-    return __atomic_load_n(&io_err_count, __ATOMIC_RELAXED);
+    return atomic_load_explicit(&io_err_count, memory_order_relaxed);
 }
