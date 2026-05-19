@@ -43,6 +43,7 @@ int main(int argc, char **argv) {
 - 同进程同时只允许一次 active 捕获；`start → stop → start` 可重入
 - `capture_stop` 幂等，可与 `atexit(capture_stop)` 配合做兜底
 - 子进程通过 fd 继承自动捕获，不需要额外编码
+- **Fork 安全**：组件用 `pthread_atfork` 在 child 自动清零捕获状态。child 直接或通过继承的 `atexit(capture_stop)` 调 stop 是**安全 no-op**——不会污染 log；但 child 仍建议用 `_exit()` 退出避免触发继承的 atexit 链
 
 ## 生产部署 — Hang 风险与缓解
 

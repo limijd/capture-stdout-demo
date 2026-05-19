@@ -25,6 +25,13 @@ int capture_start(const char *log_path);
  *   - 调用前必须已经 waitpid() 回收所有 fork 出的子进程。否则 pipe write 端
  *     仍被 child 引用 → reader read() 永不返回 0 → pthread_join 死锁
  *   - 幂等：多次调用安全，第二次起 no-op，方便配合 atexit(capture_stop)
+ *
+ * Fork 安全：
+ *   - 组件内置 pthread_atfork(child=...) handler，fork 后在 child 自动把
+ *     capture 状态清零。因此 child 直接或间接（通过继承的 atexit）调
+ *     capture_stop 是**安全 no-op**——不会 pthread_join 悬空 thread、
+ *     不会 fclose 陈旧 FILE* 缓冲污染 log
+ *   - 但这只是兜底；child 仍应优先用 _exit() 退出避免触发继承的 atexit
  */
 void capture_stop(void);
 
