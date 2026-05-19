@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
+#include <sys/wait.h>
 
 int g_test_pass = 0;
 int g_test_fail = 0;
@@ -44,6 +45,82 @@ TEST(A3_write) {
     ASSERT(file_contains("/tmp/lc_a3.log", "A3_TOKEN_WRITE_ERR"));
 }
 
+/* ========== B: fork / exec / 子孙进程 ========== */
+
+TEST(B1_fork_basic) {
+    unlink("/tmp/lc_b1.log");
+    ASSERT_EQ(capture_start("/tmp/lc_b1.log"), 0);
+    printf("B1_PARENT_BEFORE\n");
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) { printf("B1_CHILD_TOKEN\n"); fflush(stdout); _exit(0); }
+    ASSERT(pid > 0);
+    int st;
+    waitpid(pid, &st, 0);
+    printf("B1_PARENT_AFTER\n");
+    fflush(stdout);
+    capture_stop();
+    ASSERT(file_contains("/tmp/lc_b1.log", "B1_PARENT_BEFORE"));
+    ASSERT(file_contains("/tmp/lc_b1.log", "B1_CHILD_TOKEN"));
+    ASSERT(file_contains("/tmp/lc_b1.log", "B1_PARENT_AFTER"));
+}
+
+TEST(B2_fork_exec) {
+    unlink("/tmp/lc_b2.log");
+    ASSERT_EQ(capture_start("/tmp/lc_b2.log"), 0);
+    pid_t pid = fork();
+    if (pid == 0) {
+        execlp("sh", "sh", "-c",
+            "echo B2_EXEC_STDOUT; echo B2_EXEC_STDERR >&2", (char *)NULL);
+        _exit(127);
+    }
+    ASSERT(pid > 0);
+    int st;
+    waitpid(pid, &st, 0);
+    capture_stop();
+    ASSERT(file_contains("/tmp/lc_b2.log", "B2_EXEC_STDOUT"));
+    ASSERT(file_contains("/tmp/lc_b2.log", "B2_EXEC_STDERR"));
+}
+
+static void b3_child(int idx) {
+    for (int i = 0; i < 1000; i++) {
+        printf("B3-C%02d-L%04d\n", idx, i);
+    }
+    fflush(stdout);
+}
+
+TEST(B3_concurrent_children) {
+    unlink("/tmp/lc_b3.log");
+    ASSERT_EQ(capture_start("/tmp/lc_b3.log"), 0);
+    size_t spawned = fork_n_children(16, b3_child);
+    ASSERT_EQ(spawned, (size_t)16);
+    wait_all_children();
+    capture_stop();
+    size_t hits = count_unique_tokens("/tmp/lc_b3.log", "B3-C%02d-L%04d", 16, 1000);
+    ASSERT_EQ(hits, (size_t)(16 * 1000));
+    ASSERT_EQ(capture_io_error_count(), (size_t)0);
+}
+
+TEST(B4_grandchild) {
+    unlink("/tmp/lc_b4.log");
+    ASSERT_EQ(capture_start("/tmp/lc_b4.log"), 0);
+    pid_t pid = fork();
+    if (pid == 0) {
+        pid_t gpid = fork();
+        if (gpid == 0) {
+            printf("B4_GRANDCHILD_TOKEN\n");
+            fflush(stdout);
+            _exit(0);
+        }
+        int gst; waitpid(gpid, &gst, 0);
+        _exit(0);
+    }
+    ASSERT(pid > 0);
+    int st; waitpid(pid, &st, 0);
+    capture_stop();
+    ASSERT(file_contains("/tmp/lc_b4.log", "B4_GRANDCHILD_TOKEN"));
+}
+
 TEST(A5_big_write) {
     unlink("/tmp/lc_a5.log");
     ASSERT_EQ(capture_start("/tmp/lc_a5.log"), 0);
@@ -66,6 +143,11 @@ int main(void) {
     RUN_TEST(A3_write);
     run_iostream_tests();   /* A4 (C++ iostream) */
     RUN_TEST(A5_big_write);
+
+    RUN_TEST(B1_fork_basic);
+    RUN_TEST(B2_fork_exec);
+    RUN_TEST(B3_concurrent_children);
+    RUN_TEST(B4_grandchild);
 
     fprintf(stderr, "\nTotal: %d passed, %d failed\n",
             g_test_pass, g_test_fail);
