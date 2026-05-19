@@ -8,6 +8,8 @@
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <stdlib.h>
+#include <time.h>
 
 int g_test_pass = 0;
 int g_test_fail = 0;
@@ -101,6 +103,73 @@ TEST(B3_concurrent_children) {
     capture_stop();
     size_t hits = count_unique_tokens("/tmp/lc_b3.log", "B3-C%02d-L%04d", 16, 1000);
     ASSERT_EQ(hits, (size_t)(16 * 1000));
+    ASSERT_EQ(capture_io_error_count(), (size_t)0);
+}
+
+/* ========== F: 压力 / 持久性 ========== */
+
+TEST(F1_sustained_100k_lines) {
+    unlink("/tmp/lc_f1.log");
+    ASSERT_EQ(capture_start("/tmp/lc_f1.log"), 0);
+    enum { N = 100 * 1000 };
+    for (int i = 0; i < N; i++) {
+        printf("F1-L%07d\n", i);
+    }
+    fflush(stdout);
+    capture_stop();
+    /* 抽样检查首/中/尾 token */
+    ASSERT(file_contains("/tmp/lc_f1.log", "F1-L0000000"));
+    ASSERT(file_contains("/tmp/lc_f1.log", "F1-L0050000"));
+    ASSERT(file_contains("/tmp/lc_f1.log", "F1-L0099999"));
+    ASSERT_EQ(capture_io_error_count(), (size_t)0);
+}
+
+#ifdef __linux__
+static long read_rss_kb(void) {
+    FILE *fp = fopen("/proc/self/status", "r");
+    if (!fp) return -1;
+    char line[256];
+    long rss = -1;
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "VmRSS:", 6) == 0) {
+            sscanf(line + 6, "%ld", &rss);
+            break;
+        }
+    }
+    fclose(fp);
+    return rss;
+}
+#endif
+
+static void f2_child(int idx) {
+    time_t end = time(NULL) + 30;
+    int i = 0;
+    while (time(NULL) < end) {
+        printf("F2-C%02d-L%07d\n", idx, i++);
+        if ((i & 0xFFF) == 0) fflush(stdout);
+    }
+    fflush(stdout);
+}
+
+TEST(F2_soak_30s_16children) {
+    if (!getenv("LOG_CAPTURE_RUN_SOAK")) {
+        fprintf(stderr, "  (skipped: set LOG_CAPTURE_RUN_SOAK=1 to run)\n");
+        return;
+    }
+    unlink("/tmp/lc_f2.log");
+    ASSERT_EQ(capture_start("/tmp/lc_f2.log"), 0);
+#ifdef __linux__
+    long rss_before = read_rss_kb();
+#endif
+    fork_n_children(16, f2_child);
+    wait_all_children();
+    capture_stop();
+#ifdef __linux__
+    long rss_after = read_rss_kb();
+    if (rss_before > 0 && rss_after > 0) {
+        ASSERT((rss_after - rss_before) < 10 * 1024);   /* ≤ 10MB 增长 */
+    }
+#endif
     ASSERT_EQ(capture_io_error_count(), (size_t)0);
 }
 
@@ -347,6 +416,9 @@ int main(void) {
 
     RUN_TEST(E1_stderr_redirect_preserved);
     RUN_TEST(E2_stdout_redirect_preserved);
+
+    RUN_TEST(F1_sustained_100k_lines);
+    RUN_TEST(F2_soak_30s_16children);
 
     fprintf(stderr, "\nTotal: %d passed, %d failed\n",
             g_test_pass, g_test_fail);
