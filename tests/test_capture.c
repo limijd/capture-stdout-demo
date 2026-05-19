@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <dirent.h>
 
 int g_test_pass = 0;
 int g_test_fail = 0;
@@ -101,6 +102,61 @@ TEST(B3_concurrent_children) {
     ASSERT_EQ(hits, (size_t)(16 * 1000));
     ASSERT_EQ(capture_io_error_count(), (size_t)0);
 }
+
+/* ========== D: fd / 资源还原 ========== */
+
+TEST(D1_fd1_restored) {
+    unsigned long long ino_before, dev_before, ino_after, dev_after;
+    get_fd_identity(STDOUT_FILENO, &ino_before, &dev_before);
+    unlink("/tmp/lc_d1.log");
+    ASSERT_EQ(capture_start("/tmp/lc_d1.log"), 0);
+    unsigned long long ino_during, dev_during;
+    get_fd_identity(STDOUT_FILENO, &ino_during, &dev_during);
+    ASSERT(ino_during != ino_before || dev_during != dev_before);
+    capture_stop();
+    get_fd_identity(STDOUT_FILENO, &ino_after, &dev_after);
+    ASSERT_EQ(ino_after, ino_before);
+    ASSERT_EQ(dev_after, dev_before);
+}
+
+TEST(D2_fd2_restored) {
+    unsigned long long ino_before, dev_before, ino_after, dev_after;
+    get_fd_identity(STDERR_FILENO, &ino_before, &dev_before);
+    unlink("/tmp/lc_d2.log");
+    ASSERT_EQ(capture_start("/tmp/lc_d2.log"), 0);
+    capture_stop();
+    get_fd_identity(STDERR_FILENO, &ino_after, &dev_after);
+    ASSERT_EQ(ino_after, ino_before);
+    ASSERT_EQ(dev_after, dev_before);
+}
+
+#ifdef __linux__
+static int count_proc_self_fd(void) {
+    DIR *d = opendir("/proc/self/fd");
+    if (!d) return -1;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] != '.') n++;
+    }
+    closedir(d);
+    return n;
+}
+
+TEST(D3_no_fd_leak_after_50_cycles) {
+    int before = count_proc_self_fd();
+    ASSERT(before > 0);
+    for (int i = 0; i < 50; i++) {
+        char path[64];
+        snprintf(path, sizeof(path), "/tmp/lc_d3_%02d.log", i);
+        unlink(path);
+        ASSERT_EQ(capture_start(path), 0);
+        capture_stop();
+    }
+    int after = count_proc_self_fd();
+    ASSERT(after <= before + 2);
+}
+#endif
 
 /* ========== C: 生命周期与 API ========== */
 
@@ -231,6 +287,12 @@ int main(void) {
     RUN_TEST(C5_start_stop_re_entry);
     RUN_TEST(C6_stop_idempotent);
     RUN_TEST(C7_io_error_count_anytime);
+
+    RUN_TEST(D1_fd1_restored);
+    RUN_TEST(D2_fd2_restored);
+#ifdef __linux__
+    RUN_TEST(D3_no_fd_leak_after_50_cycles);
+#endif
 
     fprintf(stderr, "\nTotal: %d passed, %d failed\n",
             g_test_pass, g_test_fail);
