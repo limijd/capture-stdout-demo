@@ -4,6 +4,7 @@
  * extern "C" 接口暴露，所以本 C 文件可直接 #include "capture.hh" 并链接。
  * 链接时需用 g++ 作 driver（拉入 C++ runtime），见 Makefile。
  */
+#include <errno.h>
 #include <stdio.h>
 #include <sys/wait.h>
 #include "capture.hh"
@@ -13,9 +14,17 @@
    capture_stop 契约要求：调用前必须确保没有 child 还持有继承的 fd 1/2，
    否则 reader 永远等不到 pipe EOF → pthread_join 死锁。
    即使本 demo 当前 customer_work() 不 fork，这里仍调用以演示正确模板，
-   且对 dlopen 的客户 .so 是真实兜底——客户可能在内部 fork 而你看不见。 */
+   且对 dlopen 的客户 .so 是真实兜底——客户可能在内部 fork 而你看不见。
+   EINTR 显式 continue：customer .so 可能装 signal handler，不带 SA_RESTART
+   时一次信号就会让 waitpid 提前返回 -1，drain 不完 → capture_stop 里
+   pthread_join 死锁。终止条件只能是 ECHILD（再无 child 可回收）。 */
 static void wait_all_children(void) {
-    while (waitpid(-1, NULL, 0) > 0) { /* drain */ }
+    for (;;) {
+        pid_t r = waitpid(-1, NULL, 0);
+        if (r > 0) continue;
+        if (r < 0 && errno == EINTR) continue;
+        break;
+    }
 }
 
 int main(void) {
