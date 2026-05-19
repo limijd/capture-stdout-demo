@@ -1,6 +1,12 @@
+/* Demo for log_capture component.
+ *
+ * 注意 capture 组件的实现现在是 C++（capture.cpp + capture.hh），但通过
+ * extern "C" 接口暴露，所以本 C 文件可直接 #include "capture.hh" 并链接。
+ * 链接时需用 g++ 作 driver（拉入 C++ runtime），见 Makefile。
+ */
 #include <stdio.h>
 #include <sys/wait.h>
-#include "capture.h"
+#include "capture.hh"
 #include "customer.h"
 
 /* 回收所有 fork 出来的子进程（含 customer .so 内部可能偷偷 fork 的）。

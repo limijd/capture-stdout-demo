@@ -1,6 +1,6 @@
 #include "framework.h"
 #include "helpers.h"
-#include "../capture.h"
+#include "../capture.hh"
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>

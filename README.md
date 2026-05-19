@@ -4,26 +4,28 @@
 同时保留 shell 重定向（`1>` / `2>`）行为。基于 dup2 + pipe + reader thread，
 无需修改被捕获代码。
 
+**实现语言：C++17/23（capture.cpp / capture.hh），但所有公开符号走 `extern "C"` 暴露 C ABI——C 代码可以无缝 `#include "capture.hh"` 并链接 `capture.o`，链接时用 `g++` 作 driver 拉入 C++ runtime（见 Makefile）。**
+
 详细设计见 `docs/superpowers/specs/2026-05-19-log-capture-productionize-design.md`。
 架构原理见 `docs/ARCHITECTURE.md`。
 
 ## API
 
 ```c
-#include "capture.h"
+#include "capture.hh"
 
 int    capture_start(const char *log_path);
 void   capture_stop(void);
 size_t capture_io_error_count(void);
 ```
 
-详见 `capture.h` 内 docstring。
+详见 `capture.hh` 内 docstring。
 
 ## 集成模板（推荐）
 
 ```c
 #include <sys/wait.h>
-#include "capture.h"
+#include "capture.hh"
 
 int main(int argc, char **argv) {
     if (capture_start("xxlink.log") < 0) { perror("capture_start"); return 1; }
@@ -120,12 +122,24 @@ LOG_CAPTURE_RUN_SOAK=1 ./test_capture
 ## 文件清单
 
 ```
-capture.h / capture.c     # 组件本体（vendor 这两个文件进你的仓库即可）
-Makefile                  # 自测用
-tests/                    # 回归测试
-main.c / customer.c       # demo，做 sanity check
+capture.hh / capture.cpp  # 组件本体（vendor 这两个文件 + Makefile 片段到你的仓库）
+Makefile                  # 自测用 + 演示 g++ 编译/链接方式
+tests/                    # 回归测试（23 个，含 C 端 + C++ iostream 单元）
+main.c / customer.c       # demo（C 调用者验证 C ABI），做 sanity check
 docs/ARCHITECTURE.md      # 架构原理（中文）
 docs/superpowers/specs/   # design spec 与 review/revise 历史
+```
+
+### vendor 到 xxlink 仓库时的 build 片段
+
+```makefile
+# xxlink 的 Makefile 里加上：
+xxlink_capture.o: third_party/log_capture/capture.cpp third_party/log_capture/capture.hh
+	$(CXX) $(CXXFLAGS) $(THREAD_FLAGS) -Ithird_party/log_capture -c -o $@ $<
+
+# 链接 xxlink 时用 $(CXX) 作 driver（即使你的 xxlink 主体是 C）：
+xxlink: <你的 .c 文件> xxlink_capture.o
+	$(CXX) ... -o $@ -x c <你的 .c 文件> -x none xxlink_capture.o -lpthread
 ```
 
 ## License

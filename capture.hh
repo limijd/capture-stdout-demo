@@ -1,4 +1,14 @@
-// stdout/stderr 捕获组件（vendored source，纯 C）
+// stdout/stderr 捕获组件
+//
+// C++ 实现 + C ABI 接口：实现在 capture.cpp（C++23），但所有公开符号都
+// 走 extern "C"，因此 C 代码（如 main.c）可以直接 #include 此头文件并
+// 链接 capture.o——预处理器不在乎扩展名，只看内容。
+//
+// 设计说明：
+//   - 实现内部用 C++ 语法（anonymous namespace、std::atomic、nullptr 等）
+//   - 全局状态故意保留 POSIX 原语（pthread_t / pthread_mutex_t / FILE*），
+//     避免 C++ 对象的 namespace-scope 析构在 fork 之后 child 进程退出时
+//     触发问题（std::thread 析构会 std::terminate、std::mutex 析构需 unlocked）
 #pragma once
 #include <stddef.h>
 
