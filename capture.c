@@ -4,13 +4,13 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <errno.h>
+#include <string.h>
 
 // 每个流（stdout/stderr）的捕获状态
 typedef struct {
     int saved_fd;      // 保存的原始 fd
     int pipe_rd;       // pipe 读端
     int target_fd;     // 要捕获的 fd (STDOUT_FILENO 或 STDERR_FILENO)
-    const char *label; // log 中的前缀标识
     pthread_t thread;
     int thread_started;
     int active;
@@ -27,7 +27,6 @@ static void reset_cap(stream_capture_t *cap) {
     cap->saved_fd = -1;
     cap->pipe_rd = -1;
     cap->target_fd = -1;
-    cap->label = NULL;
     cap->thread_started = 0;
     cap->active = 0;
 }
@@ -49,7 +48,7 @@ static void write_all(int fd, const char *buf, size_t len) {
 // 读取线程：从 pipe 读数据，写入 log 文件 + 原始屏幕
 static void *reader_thread(void *arg) {
     stream_capture_t *cap = (stream_capture_t *)arg;
-    char buf[4096];
+    char buf[64 * 1024];   /* 栈上：Linux pthread 默认 8MB / macOS 默认 512KB */
     ssize_t n;
 
     for (;;) {
@@ -60,24 +59,31 @@ static void *reader_thread(void *arg) {
         }
         if (n == 0) break;
 
-        // 写到 log 文件
+        /* 1) 写 log（与另一 reader 加锁串行化） */
         pthread_mutex_lock(&log_lock);
-        fprintf(log_fp, "[%s] ", cap->label);
-        fwrite(buf, 1, (size_t)n, log_fp);
-        fflush(log_fp);
+        size_t w = fwrite(buf, 1, (size_t)n, log_fp);
+        if (w != (size_t)n) {
+            int err = errno;
+            __atomic_fetch_add(&io_err_count, 1, __ATOMIC_RELAXED);
+            /* 诊断走 reader 自己的 saved_fd（reader_out → 原 fd 1 目标，
+               reader_err → 原 fd 2 目标），不需要全局诊断 fd */
+            dprintf(cap->saved_fd,
+                "log_capture: fwrite failed: %s\n", strerror(err));
+            /* 不 break——继续 drain pipe，否则 writer 死锁 */
+        }
         pthread_mutex_unlock(&log_lock);
-        // 同时写到真正的屏幕
+
+        /* 2) echo 回原始终端（无锁，两个 reader 各写自己的 saved fd） */
         write_all(cap->saved_fd, buf, (size_t)n);
     }
     return NULL;
 }
 
 // 对单个 fd 启动捕获
-static int start_one(stream_capture_t *cap, int target_fd, const char *label) {
+static int start_one(stream_capture_t *cap, int target_fd) {
     int pipe_fds[2] = {-1, -1};
 
     cap->target_fd = target_fd;
-    cap->label = label;
 
     // 保存原始 fd
     cap->saved_fd = dup(target_fd);
@@ -149,12 +155,12 @@ int capture_start(const char *log_path) {
     fflush(stdout);
     fflush(stderr);
 
-    if (start_one(&cap_out, STDOUT_FILENO, "STDOUT") < 0) {
+    if (start_one(&cap_out, STDOUT_FILENO) < 0) {
         fclose(log_fp);
         log_fp = NULL;
         return -1;
     }
-    if (start_one(&cap_err, STDERR_FILENO, "STDERR") < 0) {
+    if (start_one(&cap_err, STDERR_FILENO) < 0) {
         stop_one(&cap_out);
         fclose(log_fp);
         log_fp = NULL;
