@@ -340,6 +340,37 @@ TEST(C6_stop_idempotent) {
     ASSERT(file_contains("/tmp/lc_c6.log", "C6_TOKEN"));
 }
 
+/* C8: 验证 child 用 exit() 退出时 libc cleanup 不污染 log。
+   核心防御：setvbuf(log_fp, _IONBF) 让 buffer 永远空，child 的 fclose
+   没有陈旧数据可 flush → 不重复写 parent 已经写过的内容。
+   适用场景：dlopen 的 customer .so 内部 fork 后用 exit() 而非 _exit()。 */
+TEST(C8_child_exit_does_not_pollute_log) {
+    unlink("/tmp/lc_c8.log");
+    ASSERT_EQ(capture_start("/tmp/lc_c8.log"), 0);
+    /* parent 先写一行，让 reader 把它 fwrite 进 log_fp */
+    printf("C8_PARENT_UNIQUE_LINE\n");
+    fflush(stdout);
+    usleep(50 * 1000);   /* 给 reader 50ms 抓 + 写 log */
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        printf("C8_CHILD_LINE\n");
+        fflush(stdout);
+        exit(0);   /* 故意用 exit (非 _exit) 触发 libc cleanup */
+    }
+    ASSERT(pid > 0);
+    int st;
+    waitpid(pid, &st, 0);
+    capture_stop();
+
+    /* parent 的行不应被 child 的 fclose libc cleanup 重复写一遍 */
+    size_t parent_line_count = file_count_occurrences("/tmp/lc_c8.log",
+                                                     "C8_PARENT_UNIQUE_LINE");
+    ASSERT_EQ(parent_line_count, (size_t)1);
+    /* child 自己的输出仍正常进 log（通过 pipe → reader → log_fp） */
+    ASSERT(file_contains("/tmp/lc_c8.log", "C8_CHILD_LINE"));
+}
+
 TEST(C7_io_error_count_anytime) {
     /* start 前 */
     size_t before = capture_io_error_count();
@@ -411,6 +442,7 @@ int main(void) {
     RUN_TEST(C5_start_stop_re_entry);
     RUN_TEST(C6_stop_idempotent);
     RUN_TEST(C7_io_error_count_anytime);
+    RUN_TEST(C8_child_exit_does_not_pollute_log);
 
     RUN_TEST(D1_fd1_restored);
     RUN_TEST(D2_fd2_restored);

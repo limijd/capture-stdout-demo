@@ -23,6 +23,29 @@ int file_contains(const char *path, const char *needle) {
     return hit;
 }
 
+size_t file_count_occurrences(const char *path, const char *needle) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return 0;
+    fseek(fp, 0, SEEK_END);
+    long sz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    char *buf = (char *)malloc((size_t)sz + 1);
+    if (!buf) { fclose(fp); return 0; }
+    size_t r = fread(buf, 1, (size_t)sz, fp);
+    buf[r] = '\0';
+    fclose(fp);
+    size_t count = 0;
+    size_t nl = strlen(needle);
+    if (nl == 0) { free(buf); return 0; }
+    const char *p = buf;
+    while ((p = strstr(p, needle)) != NULL) {
+        count++;
+        p += nl;
+    }
+    free(buf);
+    return count;
+}
+
 size_t count_unique_tokens(const char *path, const char *pattern,
                            int outer_n, int inner_n) {
     size_t hit = 0;

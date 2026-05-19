@@ -9,6 +9,9 @@ extern "C" {
 /* 读取 path，若内容含 needle 子串返回 1，否则 0；找不到文件返回 0。 */
 int file_contains(const char *path, const char *needle);
 
+/* 数 path 中 needle 子串的出现次数（非重叠扫描）；找不到文件返回 0。 */
+size_t file_count_occurrences(const char *path, const char *needle);
+
 /* 统计 path 中匹配 pattern (sprintf 模板含 %02d-%04d 类格式) 的独一无二行数。 */
 size_t count_unique_tokens(const char *path, const char *pattern,
                            int outer_n, int inner_n);

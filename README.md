@@ -46,7 +46,8 @@ int main(int argc, char **argv) {
 
 - `capture_start` 必须在主线程、fork 任何子进程 / dlopen 任何 .so **之前**调用
 - `capture_stop` 调用前必须先 `waitpid()` 回收所有 fork child，否则 pthread_join 死锁；最简写法：`while (waitpid(-1, NULL, 0) > 0) {}`
-- `capture_stop` **只能在主进程主线程调用**——child 进程绝对不要调（fork 时 reader 线程不进 child，cap.thread 悬空 + 陈旧 log_fp 缓冲会污染 log）。child 应用 `_exit()` 退出
+- `capture_stop` **只能在主进程主线程调用**——child 进程不应调（cap.thread 悬空 → pthread_join UB）
+- **child 进程退出方式**：推荐 `_exit()`；如果某些代码路径无法保证（dlopen 的 customer .so / 第三方库），用 `exit()` 也不会污染 log——组件已用 `setvbuf(log_fp, _IONBF)` 防御 child libc cleanup 的脏 buffer 写
 - 同进程同时只允许一次 active 捕获；`start → stop → start` 可重入
 - `capture_stop` 幂等（多次调安全）
 - 子进程通过 fd 继承自动捕获，不需要额外编码
@@ -78,7 +79,7 @@ int main(int argc, char **argv) {
 **MUST**：
 
 1. **xxlink 主循环结束、`capture_stop()` 之前必须 `waitpid()` 回收所有 child**（最简：`while (waitpid(-1, NULL, 0) > 0) {}`）。如果用 job pool / 异步队列 fork gcc，确保 pool 已完全 drain 再 stop。这是组件外的纪律——**没有任何代码层强制约束**，只有契约
-2. **child 进程严禁调 `capture_stop`**。fork+exec 模式的 child 用 `_exit()` 退出最干净；纯 fork（不 exec）的 child 退出也用 `_exit()` 而非 `exit()` / `return`，避免触发 libc cleanup 链
+2. **child 进程不要调 `capture_stop`**（cap.thread 悬空 → pthread_join UB）。child 推荐用 `_exit()` 退出；若 dlopen 的 customer .so 内部 fork 后用了 `exit()`，组件已用 `setvbuf(log_fp, _IONBF)` 防御 libc cleanup 时 fclose 陈旧 buffer 污染 log——你不必为不可控的 child 代码担心 log 数据完整性
 3. **log 文件放本地 SSD**，避免 NFS / 网络盘上的慢写传染到 gcc 编译速度
 
 **SHOULD**：

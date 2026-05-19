@@ -166,6 +166,12 @@ int capture_start(const char *log_path) {
     log_fp = fopen(log_path, "a");
     if (!log_fp) return -1;
 
+    /* 把 log_fp 设为 unbuffered，防御 child 用 exit() 退出时 libc cleanup
+       fclose 继承的 log_fp 把陈旧 buffer 又写一遍污染 log 文件。
+       reader thread 写入的 chunk 通常 ≥ 1KB（pipe batch read 结果），libc
+       会绕过 < chunk_size 的 buffer 走 direct write，性能差异不可测。 */
+    setvbuf(log_fp, NULL, _IONBF, 0);
+
     // 先 flush，避免缓冲区内容错乱
     fflush(stdout);
     fflush(stderr);

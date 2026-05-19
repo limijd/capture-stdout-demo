@@ -26,10 +26,11 @@ int capture_start(const char *log_path);
  *     子进程。否则 pipe write 端仍被 child 引用 → reader read() 永不返回 0
  *     → pthread_join 死锁
  *   - 幂等：多次调用安全，第二次起 no-op
- *   - **child 进程严禁调用此函数**（不论 fork-only 还是 fork+exec 前）。
- *     fork 时整片内存被复制到 child，但 reader 线程不在 child；
- *     child 调 capture_stop 会试图 pthread_join 悬空 thread (UB)、
- *     fclose 陈旧 FILE* 缓冲（污染 log file）。child 用 _exit() 退出最安全
+ *   - **child 进程不应调用此函数**——cap.thread 是悬空 pthread_t，
+ *     pthread_join 行为 UB（glibc 实测 ESRCH 立即返回，不崩但无意义）。
+ *     child 推荐用 _exit() 退出，但即使用了 exit() 触发 libc cleanup：
+ *     组件已用 setvbuf(_IONBF) 让 log_fp 不缓冲，child 的 fclose 不会
+ *     污染 log 文件
  */
 void capture_stop(void);
 
