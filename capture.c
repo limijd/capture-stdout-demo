@@ -5,6 +5,9 @@
 #include <pthread.h>
 #include <errno.h>
 #include <string.h>
+#ifdef __linux__
+#include <fcntl.h>
+#endif
 
 // 每个流（stdout/stderr）的捕获状态
 typedef struct {
@@ -96,6 +99,11 @@ static int start_one(stream_capture_t *cap, int target_fd) {
         return -1;
     }
     cap->pipe_rd = pipe_fds[0];
+
+#ifdef __linux__
+    /* 扩容 pipe 到 1MB 防御 burst；失败静默 fallback 到默认 16-64KB */
+    (void)fcntl(pipe_fds[0], F_SETPIPE_SZ, 1 << 20);
+#endif
 
     // 把目标 fd 指向 pipe 写端
     if (dup2(pipe_fds[1], target_fd) < 0) {
